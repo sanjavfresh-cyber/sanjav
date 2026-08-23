@@ -75,3 +75,41 @@ begin
       for all to authenticated using (true) with check (true)$f$, t);
   end loop;
 end $$;
+
+
+-- ===== Gastos y Préstamos (incluido) =====
+
+create table if not exists gastos (
+  id         uuid primary key default gen_random_uuid(),
+  fecha      date not null default current_date,
+  concepto   text not null,
+  categoria  text default 'Otro',
+  monto      numeric not null default 0,
+  nota       text,
+  creado     timestamptz default now()
+);
+create index if not exists gastos_fecha_idx on gastos(fecha);
+
+create table if not exists prestamos (
+  id       uuid primary key default gen_random_uuid(),
+  persona  text not null,
+  tipo     text not null default 'me_deben',  -- 'me_deben' | 'yo_debo'
+  monto    numeric not null default 0,
+  fecha    date not null default current_date,
+  estado   text not null default 'activo',     -- 'activo' | 'saldado'
+  nota     text,
+  creado   timestamptz default now()
+);
+
+alter table gastos    enable row level security;
+alter table prestamos enable row level security;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['gastos','prestamos'] loop
+    execute format('drop policy if exists "acceso_autenticado" on %I', t);
+    execute format($f$create policy "acceso_autenticado" on %I
+      for all to authenticated using (true) with check (true)$f$, t);
+  end loop;
+end $$;

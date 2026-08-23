@@ -161,7 +161,7 @@ const LOGO="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBAUEBAYFB
 </script>
 <script>
 const CFG_KEY="sanjaf_cfg", THEME_KEY="sanjaf_theme";
-let sb=null, STATE={catalogo:[],ventas:[],clientes:[]};
+let sb=null, STATE={catalogo:[],ventas:[],clientes:[],gastos:[],prestamos:[]};
 const $=(id)=>document.getElementById(id);
 const root=()=>$("root");
 const money=n=>"$"+(Math.round((+n||0)*100)/100).toLocaleString("es-MX",{minimumFractionDigits:0,maximumFractionDigits:2});
@@ -247,15 +247,20 @@ async function logout(){await sb.auth.signOut();location.reload();}
 
 // ============ DATA ============
 async function loadAll(){
-  const [pc,vc,cc]=await Promise.all([
+  const [pc,vc,cc,gc,lc]=await Promise.all([
     sb.from("productos").select("*").order("nombre"),
     sb.from("ventas").select("*, venta_items(*)").order("creado",{ascending:false}),
-    sb.from("clientes").select("nombre").order("nombre")
+    sb.from("clientes").select("nombre").order("nombre"),
+    sb.from("gastos").select("*").order("fecha",{ascending:false}),
+    sb.from("prestamos").select("*").order("creado",{ascending:false})
   ]);
   if(pc.error)throw pc.error; if(vc.error)throw vc.error;
+  if(gc.error||lc.error)throw (gc.error||lc.error);
   STATE.catalogo=pc.data||[];
   STATE.ventas=(vc.data||[]).map(v=>({...v,items:(v.venta_items||[]).map(it=>({nombre:it.nombre,udm:it.udm,cant:+it.cant,precio:+it.precio,costo:+it.costo}))}));
   STATE.clientes=(cc.data||[]).map(c=>c.nombre);
+  STATE.gastos=gc.data||[];
+  STATE.prestamos=lc.data||[];
 }
 
 // ============ APP SHELL ============
@@ -273,6 +278,7 @@ async function startApp(){
     <button data-go="vender" class="on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6"/></svg>Vender</button>
     <button data-go="notas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h9l5 5v15H6z"/><path d="M14 2v6h6M9 13h6M9 17h6"/></svg>Notas</button>
     <button data-go="catalogo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M3 12h18M3 18h18"/></svg>Catálogo</button>
+    <button data-go="gastos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20M6 15h4"/></svg>Gastos</button>
     <button data-go="panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>Panel</button>
   </nav>`;
   $("themeBtn").onclick=cycleTheme;
@@ -283,7 +289,7 @@ async function startApp(){
 }
 function view(h){$("view").innerHTML=h;}
 function go(r,arg){route=r;routeArg=arg||null;render();document.querySelectorAll("#nav button").forEach(b=>b.classList.toggle("on",b.dataset.go===r));window.scrollTo(0,0);}
-function render(){({vender:renderVender,notas:renderNotas,nota:renderNota,catalogo:renderCatalogo,panel:renderPanel}[route]||renderVender)();}
+function render(){({vender:renderVender,notas:renderNotas,nota:renderNota,catalogo:renderCatalogo,gastos:renderGastos,panel:renderPanel}[route]||renderVender)();}
 
 // ============ VENDER ============
 let draft=null;
@@ -578,33 +584,144 @@ function editProd(id){
     STATE.catalogo=STATE.catalogo.filter(x=>x.id!==p.id);closeSheet();renderCatalogo();toast("Eliminado");});
 }
 
+// ============ GASTOS Y PRÉSTAMOS ============
+let gastoTab="gastos";
+function renderGastos(){
+  const hoy=todayISO(),now=new Date();
+  const gHoy=STATE.gastos.filter(g=>g.fecha===hoy).reduce((a,g)=>a+ +g.monto,0);
+  const gSem=STATE.gastos.filter(g=>{const d=new Date(g.fecha+"T00:00:00"),df=(now-d)/86400000;return df<7&&df>=-1;}).reduce((a,g)=>a+ +g.monto,0);
+  const meDeben=STATE.prestamos.filter(p=>p.estado==="activo"&&p.tipo==="me_deben").reduce((a,p)=>a+ +p.monto,0);
+  const yoDebo=STATE.prestamos.filter(p=>p.estado==="activo"&&p.tipo==="yo_debo").reduce((a,p)=>a+ +p.monto,0);
+  view(`<div class="screen"><h1>${gastoTab==="gastos"?"Gastos":"Préstamos"}</h1>
+    <div class="chips">
+      <button class="chip ${gastoTab==="gastos"?'on':''}" data-t="gastos">Gastos</button>
+      <button class="chip ${gastoTab==="prestamos"?'on':''}" data-t="prestamos">Préstamos</button>
+    </div>
+    ${gastoTab==="gastos"?`
+      <div class="row" style="margin-bottom:12px">
+        <div class="kpi" style="flex:1"><div class="l">Gasto hoy</div><div class="v num" style="color:var(--danger)">${money0(gHoy)}</div></div>
+        <div class="kpi" style="flex:1"><div class="l">Gasto semana</div><div class="v num" style="color:var(--danger)">${money0(gSem)}</div></div>
+      </div>
+      <button class="btn btn-p btn-block" id="addG" style="margin-bottom:12px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Registrar gasto</button>
+      <div id="gList">${gastosList()}</div>`
+    :`
+      <div class="row" style="margin-bottom:12px">
+        <div class="kpi" style="flex:1"><div class="l">Me deben</div><div class="v num" style="color:var(--info)">${money0(meDeben)}</div></div>
+        <div class="kpi" style="flex:1"><div class="l">Yo debo</div><div class="v num" style="color:var(--warn)">${money0(yoDebo)}</div></div>
+      </div>
+      <button class="btn btn-p btn-block" id="addP" style="margin-bottom:12px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>Registrar préstamo</button>
+      <div id="pList">${prestamosList()}</div>`}
+  </div>`);
+  document.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{gastoTab=c.dataset.t;renderGastos();});
+  if(gastoTab==="gastos"){$("addG").onclick=()=>editGasto(null);document.querySelectorAll("[data-gid]").forEach(b=>b.onclick=()=>editGasto(b.dataset.gid));}
+  else{$("addP").onclick=()=>editPrestamo(null);document.querySelectorAll("[data-pid]").forEach(b=>b.onclick=()=>editPrestamo(b.dataset.pid));}
+}
+function gastosList(){
+  if(!STATE.gastos.length)return `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="6" width="20" height="13" rx="2"/><path d="M2 10h20"/></svg><div>Aún no hay gastos registrados.</div></div>`;
+  return `<div class="card">`+STATE.gastos.map(g=>`<button class="prod" data-gid="${g.id}"><div class="nm"><b>${esc(g.concepto)}</b><span>${fmtDate(g.fecha)} · <span class="tagcat">${esc(g.categoria||"Otro")}</span></span></div><div class="pr"><b style="color:var(--danger)">-${money(g.monto)}</b></div></button>`).join("")+`</div>`;
+}
+function prestamosList(){
+  if(!STATE.prestamos.length)return `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 8v8M8 12h8"/></svg><div>Aún no hay préstamos.</div></div>`;
+  const act=STATE.prestamos.filter(p=>p.estado==="activo"),sal=STATE.prestamos.filter(p=>p.estado==="saldado");
+  const card=p=>`<button class="prod" data-pid="${p.id}"><div class="nm"><b>${esc(p.persona)}</b><span>${fmtDate(p.fecha)} · <span class="tagcat">${p.tipo==="me_deben"?"Me deben":"Yo debo"}</span></span></div><div class="pr"><b style="color:${p.tipo==="me_deben"?'var(--info)':'var(--warn)'}${p.estado==="saldado"?';opacity:.45':''}">${money(p.monto)}</b></div></button>`;
+  return (act.length?`<div class="card">`+act.map(card).join("")+`</div>`:`<div class="empty" style="padding:24px">Sin préstamos activos.</div>`)
+    +(sal.length?`<p class="sub" style="margin:16px 0 6px">Saldados</p><div class="card">`+sal.map(card).join("")+`</div>`:"");
+}
+function editGasto(id){
+  const g=id?STATE.gastos.find(x=>x.id===id):{id:null,fecha:todayISO(),concepto:"",categoria:"Mercancía",monto:""};
+  const isNew=!id,cats=["Mercancía","Renta","Sueldos","Gasolina","Servicios","Empaque","Otro"];
+  openSheet(`<h3>${isNew?"Registrar gasto":"Editar gasto"}</h3><div class="col">
+    <div><label class="f">Concepto</label><input class="inp" id="gCon" value="${esc(g.concepto)}" placeholder="Ej. Gasolina camioneta"></div>
+    <div class="row"><div style="flex:1"><label class="f">Fecha</label><input class="inp" type="date" id="gFec" value="${g.fecha}"></div>
+      <div style="flex:1"><label class="f">Monto</label><input class="inp num" id="gMon" inputmode="decimal" value="${g.monto??""}" placeholder="0"></div></div>
+    <div><label class="f">Categoría</label><select class="inp" id="gCat">${cats.map(c=>`<option ${g.categoria===c?"selected":""}>${c}</option>`).join("")}</select></div>
+    <button class="btn btn-p btn-block" id="gSave">Guardar</button>
+    ${isNew?"":`<button class="btn btn-danger btn-block" id="gDel">Eliminar</button>`}</div>`);
+  $("gSave").onclick=async()=>{
+    const concepto=$("gCon").value.trim();if(!concepto){toast("Escribe el concepto");return;}
+    const obj={concepto,fecha:$("gFec").value,categoria:$("gCat").value,monto:+$("gMon").value||0};$("gSave").disabled=true;
+    if(isNew){const {data,error}=await sb.from("gastos").insert(obj).select().single();if(error){toast("Error: "+error.message);$("gSave").disabled=false;return;}STATE.gastos.push(data);}
+    else{const {error}=await sb.from("gastos").update(obj).eq("id",g.id);if(error){toast("Error: "+error.message);$("gSave").disabled=false;return;}Object.assign(g,obj);}
+    STATE.gastos.sort((a,b)=>a.fecha<b.fecha?1:-1);closeSheet();renderGastos();toast("Gasto guardado");};
+  if(!isNew)$("gDel").onclick=()=>confirmSheet("¿Eliminar gasto?","","Eliminar",async()=>{const {error}=await sb.from("gastos").delete().eq("id",g.id);if(error){toast("Error: "+error.message);return;}STATE.gastos=STATE.gastos.filter(x=>x.id!==g.id);closeSheet();renderGastos();});
+}
+function editPrestamo(id){
+  const p=id?STATE.prestamos.find(x=>x.id===id):{id:null,persona:"",tipo:"me_deben",monto:"",fecha:todayISO(),estado:"activo",nota:""};
+  const isNew=!id;
+  openSheet(`<h3>${isNew?"Registrar préstamo":"Editar préstamo"}</h3><div class="col">
+    <div><label class="f">Persona</label><input class="inp" id="pPer" value="${esc(p.persona)}" placeholder="Nombre"></div>
+    <div class="row"><div style="flex:1"><label class="f">Tipo</label><select class="inp" id="pTipo"><option value="me_deben" ${p.tipo==="me_deben"?"selected":""}>Me deben</option><option value="yo_debo" ${p.tipo==="yo_debo"?"selected":""}>Yo debo</option></select></div>
+      <div style="flex:1"><label class="f">Monto</label><input class="inp num" id="pMon" inputmode="decimal" value="${p.monto??""}" placeholder="0"></div></div>
+    <div class="row"><div style="flex:1"><label class="f">Fecha</label><input class="inp" type="date" id="pFec" value="${p.fecha}"></div>
+      <div style="flex:1"><label class="f">Estado</label><select class="inp" id="pEst"><option value="activo" ${p.estado==="activo"?"selected":""}>Activo</option><option value="saldado" ${p.estado==="saldado"?"selected":""}>Saldado</option></select></div></div>
+    <div><label class="f">Nota</label><input class="inp" id="pNota" value="${esc(p.nota||"")}" placeholder="Opcional"></div>
+    <button class="btn btn-p btn-block" id="pSaveL">Guardar</button>
+    ${isNew?"":`<button class="btn btn-danger btn-block" id="pDelL">Eliminar</button>`}</div>`);
+  $("pSaveL").onclick=async()=>{
+    const persona=$("pPer").value.trim();if(!persona){toast("Escribe la persona");return;}
+    const obj={persona,tipo:$("pTipo").value,monto:+$("pMon").value||0,fecha:$("pFec").value,estado:$("pEst").value,nota:$("pNota").value.trim()};$("pSaveL").disabled=true;
+    if(isNew){const {data,error}=await sb.from("prestamos").insert(obj).select().single();if(error){toast("Error: "+error.message);$("pSaveL").disabled=false;return;}STATE.prestamos.unshift(data);}
+    else{const {error}=await sb.from("prestamos").update(obj).eq("id",p.id);if(error){toast("Error: "+error.message);$("pSaveL").disabled=false;return;}Object.assign(p,obj);}
+    closeSheet();renderGastos();toast("Guardado");};
+  if(!isNew)$("pDelL").onclick=()=>confirmSheet("¿Eliminar préstamo?","","Eliminar",async()=>{const {error}=await sb.from("prestamos").delete().eq("id",p.id);if(error){toast("Error: "+error.message);return;}STATE.prestamos=STATE.prestamos.filter(x=>x.id!==p.id);closeSheet();renderGastos();});
+}
+
 // ============ PANEL ============
-let period="mes";
-function inPeriod(v){const d=new Date(v.fecha+"T00:00:00"),now=new Date();
+let period="mes", pDesde=null, pHasta=null;
+function isoLocal(d){return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);}
+function ensureRange(){if(!pHasta)pHasta=todayISO();if(!pDesde){const d=new Date();pDesde=isoLocal(new Date(d.getFullYear(),d.getMonth(),1));}}
+function inPeriod(v){
+  if(period==="rango"){ensureRange();return v.fecha>=pDesde&&v.fecha<=pHasta;}
+  const d=new Date(v.fecha+"T00:00:00"),now=new Date();
   if(period==="hoy")return v.fecha===todayISO();
   if(period==="semana"){const diff=(now-d)/86400000;return diff<7&&diff>=-1;}
   return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}
 function renderPanel(){
+  if(period==="rango")ensureRange();
   const vs=STATE.ventas.filter(inPeriod);
   const venta=vs.reduce((a,v)=>a+ +v.venta,0),costo=vs.reduce((a,v)=>a+ +v.costo,0),util=venta-costo,margen=venta>0?util/venta*100:0;
   const map={};vs.forEach(v=>v.items.forEach(it=>{map[it.nombre]=(map[it.nombre]||0)+it.cant*it.precio;}));
   const top=Object.entries(map).sort((a,b)=>b[1]-a[1]).slice(0,6);
-  const days=[];for(let i=13;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);const iso=new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);days.push(STATE.ventas.filter(v=>v.fecha===iso).reduce((a,v)=>a+ +v.venta,0));}
+  const gper=STATE.gastos.filter(inPeriod).reduce((a,g)=>a+ +g.monto,0);
+  const utilNeta=util-gper, margenNeto=venta>0?utilNeta/venta*100:0;
+  let days=[],chartTitle;
+  if(period==="rango"){
+    const start=new Date(pDesde+"T00:00:00"),end=new Date(pHasta+"T00:00:00");
+    let n=Math.round((end-start)/86400000)+1;if(n<1)n=1;if(n>92)n=92;
+    for(let i=0;i<n;i++){const d=new Date(start);d.setDate(d.getDate()+i);const iso=isoLocal(d);days.push(STATE.ventas.filter(v=>v.fecha===iso).reduce((a,v)=>a+ +v.venta,0));}
+    chartTitle="Venta por día";
+  }else{
+    for(let i=13;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);days.push(STATE.ventas.filter(v=>v.fecha===isoLocal(d)).reduce((a,v)=>a+ +v.venta,0));}
+    chartTitle="Venta últimos 14 días";
+  }
   const mx=Math.max(1,...days);
   const porCobrar=STATE.ventas.filter(v=>v.pago==="pendiente").reduce((a,v)=>a+ +v.venta,0);
+  const chips=[["hoy","Hoy"],["semana","Semana"],["mes","Mes"],["rango","Rango"]];
+  const lbl=period==="rango"?`${fmtDate(pDesde)} — ${fmtDate(pHasta)}`:period==="hoy"?"hoy":period==="semana"?"esta semana":"este mes";
   view(`<div class="screen"><h1>Panel</h1>
-    <div class="chips">${["hoy","semana","mes"].map(p=>`<button class="chip ${period===p?'on':''}" data-p="${p}">${p==="hoy"?"Hoy":p==="semana"?"Semana":"Mes"}</button>`).join("")}</div>
+    <div class="chips">${chips.map(([p,l])=>`<button class="chip ${period===p?'on':''}" data-p="${p}">${l}</button>`).join("")}</div>
+    ${period==="rango"?`<div class="card pad" style="margin-bottom:11px"><div class="row">
+        <div style="flex:1"><label class="f">Desde</label><input class="inp" type="date" id="pD" value="${pDesde}"></div>
+        <div style="flex:1"><label class="f">Hasta</label><input class="inp" type="date" id="pH" value="${pHasta}"></div>
+      </div></div>`:""}
     <div class="kpis" style="margin-bottom:11px">
       <div class="kpi"><div class="l">Venta</div><div class="v num">${money0(venta)}</div><div class="s">${vs.length} nota(s)</div></div>
-      <div class="kpi"><div class="l">Utilidad</div><div class="v num">${money0(util)}</div><div class="s">margen ${margen.toFixed(0)}%</div></div>
-      <div class="kpi"><div class="l">Costo</div><div class="v num" style="color:var(--muted)">${money0(costo)}</div></div>
+      <div class="kpi"><div class="l">Utilidad neta</div><div class="v num">${money0(utilNeta)}</div><div class="s">margen ${margenNeto.toFixed(0)}%</div></div>
+      <div class="kpi"><div class="l">Costo mercancía</div><div class="v num" style="color:var(--muted)">${money0(costo)}</div><div class="s">utilidad bruta ${money0(util)}</div></div>
+      <div class="kpi"><div class="l">Gastos</div><div class="v num" style="color:var(--danger)">${money0(gper)}</div><div class="s">del periodo</div></div>
+      <div class="kpi"><div class="l">Salida total</div><div class="v num" style="color:var(--muted)">${money0(costo+gper)}</div><div class="s">costo + gastos</div></div>
       <div class="kpi"><div class="l">Por cobrar</div><div class="v num" style="color:var(--warn)">${money0(porCobrar)}</div><div class="s">total acumulado</div></div>
     </div>
-    <div class="card pad" style="margin-bottom:11px"><div class="l" style="font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;font-family:Jost">Venta últimos 14 días</div>
-      <div class="bars">${days.map(d=>`<div class="b ${d===0?'z':''}" style="height:${d===0?2:Math.max(4,Math.round(d/mx*84))}px" title="${money0(d)}"></div>`).join("")}</div></div>
-    <div class="card pad"><div class="l" style="font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;font-family:Jost;margin-bottom:8px">Más vendidos (${period})</div>
+    <div class="card pad" style="margin-bottom:11px"><div class="l" style="font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;font-family:Jost">${chartTitle}</div>
+      <div class="bars">${days.map(d=>`<div class="b ${d===0?'z':''}" style="height:${d===0?2:Math.max(4,Math.round(d/mx*84))}px" title="${money0(d)}"></div>`).join("")}</div>
+      ${period==="rango"?`<div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11px;color:var(--faint)"><span>${fmtDate(pDesde)}</span><span>${fmtDate(pHasta)}</span></div>`:""}</div>
+    <div class="card pad"><div class="l" style="font-size:11.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em;font-family:Jost;margin-bottom:8px">Más vendidos (${lbl})</div>
       ${top.length?top.map(([n,val])=>`<div class="totline" style="padding:6px 0;border-bottom:1px solid var(--line-soft)"><span>${esc(n)}</span><span class="num" style="color:var(--green);font-weight:600">${money0(val)}</span></div>`).join(""):`<div style="color:var(--faint);padding:8px 0">Sin ventas en este periodo</div>`}</div></div>`);
   document.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{period=c.dataset.p;renderPanel();});
+  if(period==="rango"){
+    $("pD").onchange=e=>{pDesde=e.target.value;if(pDesde>pHasta)pHasta=pDesde;renderPanel();};
+    $("pH").onchange=e=>{pHasta=e.target.value;if(pHasta<pDesde)pDesde=pHasta;renderPanel();};
+  }
 }
 
 // ============ helpers ============
