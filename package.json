@@ -1,0 +1,7 @@
+{
+  "name": "sanjaf-ventas",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SANJAF - ventas, notas de remisión y facturación (Facturapi)",
+  "engines": { "node": "20.x" }
+}
